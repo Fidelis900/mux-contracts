@@ -182,6 +182,7 @@ All contracts use **instance storage** (and, for `mux-policy` / `mux-delegation`
 | T-27 | Stale / unrevoked grants | Tampering | Low | Medium | `revoke_delegate` removes the full permission set; grants are permission-scoped `Symbol`s vetted by the application layer |
 | T-28 | `link_contract_id` identity spoofing | Spoofing | Low | Medium | Caller-supplied `admin` must authorize itself (`admin.require_auth()`), and the link is **write-once** (`ContractIdAlreadySet`); documented as self-gated, not a stored-admin gate — see [delegation-upgrade.md](delegation-upgrade.md) |
 | T-29 | `mux-delegation` upgrade hijack | Elevation of Privilege | Low | Critical | `upgrade()` requires stored `DataKey::Admin` auth; `NotInitialized` (fail-closed) if `initialize` was never called |
+| T-51 | Delegation wildcard permission escalation | Elevation of Privilege | Low | High | Deny-by-default permission checks: only explicit permission symbols are recognized; wildcard/blanket grants are strictly forbidden unless documented |
 
 ### 4.9 Daily Spend Policy (`mux-policy`)
 
@@ -196,7 +197,7 @@ All contracts use **instance storage** (and, for `mux-policy` / `mux-delegation`
 | # | Threat | STRIDE | Likelihood | Impact | Mitigation |
 |---|--------|--------|------------|--------|------------|
 | T-33 | Quorum bypass | Elevation of Privilege | Low | Critical | `execute_recovery` requires `approvals.len() >= quorum_threshold`; `DuplicateApproval` rejects double-votes; threshold validated at init (`1 <= t <= guardians.len()`) |
-| T-34 | Timelock bypass | Tampering | Low | Critical | `execute_recovery` checks `executable_at` (`initiated_at + RECOVERY_TIMELOCK`); owner can `cancel_recovery()` during the window |
+| T-34 | Timelock bypass / illicit shortening | Tampering | Low | Critical | `execute_recovery` strictly checks `executable_at` (`initiated_at + RECOVERY_TIMELOCK`); timelock cannot be shortened illicitly; owner can `cancel_recovery()` during the window |
 | T-35 | Admin/owner+guardian bypass | Elevation of Privilege | Low | Critical | `approve_recovery_admin` requires **both** `owner.require_auth()` and a registered co-guardian (`co_guardian.require_auth()` + membership check) |
 | T-36 | Expired recovery request | Denial of Service | Low | Medium | `RECOVERY_EXPIRY` (120,960 ledgers ≈ 7d) bounds the window; stale `Pending` requests are overwritten by the next `initiate_recovery` |
 

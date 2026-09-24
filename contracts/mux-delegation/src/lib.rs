@@ -745,6 +745,33 @@ mod tests {
     }
 
     #[test]
+    fn test_wildcard_permissions_forbidden_deny_by_default() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+
+        // Grant explicit permissions only
+        client.grant_delegate(&owner, &delegate, &vec![&env, symbol_short!("transfer")]);
+
+        // Specific granted permission is recognized
+        assert!(client.is_delegate(&owner, &delegate, &symbol_short!("transfer")));
+        assert!(client.check_delegate(&owner, &delegate, &symbol_short!("transfer")).is_ok());
+
+        // Any ungranted permission (wildcard / star / ungranted symbol) is rejected (deny-by-default)
+        assert!(!client.is_delegate(&owner, &delegate, &symbol_short!("*")));
+        assert!(!client.is_delegate(&owner, &delegate, &symbol_short!("all")));
+        assert!(!client.is_delegate(&owner, &delegate, &symbol_short!("admin")));
+        assert_eq!(
+            client.try_check_delegate(&owner, &delegate, &symbol_short!("*")),
+            Err(Ok(MuxDelegationError::NotADelegate))
+        );
+        assert_eq!(
+            client.try_check_delegate(&owner, &delegate, &symbol_short!("all")),
+            Err(Ok(MuxDelegationError::NotADelegate))
+        );
+    }
+
+    #[test]
     fn test_error_code_not_a_delegate() {
         assert_eq!(MuxDelegationError::NotADelegate as u32, 6001);
     }
