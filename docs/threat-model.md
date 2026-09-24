@@ -111,6 +111,7 @@ The `soroban-test-helpers` crate is a test utility (`rlib` only, no WASM) and is
 | T-08 | Gas griefing via oversized batch | Denial of Service | Medium | Medium | `MAX_BATCH_SIZE = 50` hard cap enforced before execution |
 | T-09 | Required-op failure ignored | Tampering | Low | High | `require_success` flag panics the transaction, rolling back all operations |
 | T-10 | Cross-contract call to malicious contract | Tampering | Medium | High | Caller is authenticated; target contracts are user-supplied — document that callers must vet targets |
+| T-50 | Simulate vs execute parity drift / event spam | Tampering | Low | Medium | `simulate_batch` strictly mirrors `execute_batch` size and validation gates (`EmptyBatch`, `BatchTooLarge`) and enforces `caller.require_auth()` without state mutation; emits distinct `sim_done` |
 
 ### 4.4 Permission Registry (`mux-permissions`)
 
