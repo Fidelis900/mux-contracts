@@ -921,6 +921,81 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_batch_atomic_require_success_aborts_whole_batch() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let mut ops: Vec<Operation> = Vec::new(&env);
+        // Valid op 1
+        ops.push_back(Operation {
+            target: contract_id.clone(),
+            fn_name: symbol_short!("max_batch"),
+            args: Vec::new(&env),
+            require_success: true,
+            kind: BatchOperationKind::Invoke,
+        });
+        // Failing op 2 with require_success = true
+        ops.push_back(Operation {
+            target: Address::generate(&env),
+            fn_name: symbol_short!("fail_op"),
+            args: Vec::new(&env),
+            require_success: true,
+            kind: BatchOperationKind::Invoke,
+        });
+
+        let result = client.try_execute_batch(&caller, &ops);
+        assert_eq!(result, Err(Ok(MuxBatcherError::RequiredOperationFailed)));
+    }
+
+    #[test]
+    fn test_batch_per_op_failure_policy_mixed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let mut ops: Vec<Operation> = Vec::new(&env);
+        // Successful op 1
+        ops.push_back(Operation {
+            target: contract_id.clone(),
+            fn_name: symbol_short!("max_batch"),
+            args: Vec::new(&env),
+            require_success: false,
+            kind: BatchOperationKind::Invoke,
+        });
+        // Failing op 2 with require_success = false
+        ops.push_back(Operation {
+            target: Address::generate(&env),
+            fn_name: symbol_short!("nonexist"),
+            args: Vec::new(&env),
+            require_success: false,
+            kind: BatchOperationKind::Invoke,
+        });
+
+        let result = client.execute_batch(&caller, &ops);
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 1);
+    }
+
+    // ── Issue #79: estimate_fees ───────────────────────────────────────────────
+
+    #[test]
+    fn test_estimate_fees_returns_fee_per_op_times_count() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        assert_eq!(client.estimate_fees(&1), 100);
+        assert_eq!(client.estimate_fees(&10), 1_000);
+        assert_eq!(client.estimate_fees(&50), 5_000);
+    }
+
+    #[test
     // ── Issue #79: estimate_fees ───────────────────────────────────────────────
 
     #[test]

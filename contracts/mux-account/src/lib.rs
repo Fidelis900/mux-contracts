@@ -1468,6 +1468,30 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_unpause_requires_owner_auth() {
+        let (_env, client, _owner) = setup_without_auth();
+        let result = client.try_unpause();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_guardians_query_returns_registered_guardians() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxAccount);
+        let client = MuxAccountClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        let g2 = Address::generate(&env);
+        let guardians = soroban_sdk::vec![&env, g1.clone(), g2.clone()];
+        client.initialize(&owner, &guardians);
+        let stored = client.guardians();
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored.get(0).unwrap(), g1);
+        assert_eq!(stored.get(1).unwrap(), g2);
+    }
+
     /// A single-scope list used by session-key happy-path tests. Empty-scope
     /// keys are rejected fail-closed (T-40 in docs/threat-model.md), so tests
     /// that expect success must register at least one granted capability.

@@ -191,22 +191,25 @@ impl MuxAccountFactory {
             return Err(MuxAccountFactoryError::InvalidAccount);
         }
 
-        // STORAGE-GRIEFING: bound Accounts vec growth on deploy.
-        let mut accounts = Self::load_accounts_under_cap(&env, &owner)?;
+        // STORAGE-GRIEFING: bound Accounts vec growth on deploy; idempotent if already registered.
+        let (mut accounts, already_registered) =
+            Self::load_accounts_for_deploy(&env, &owner, &account_address)?;
 
-        accounts.push_back(account_address.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::Accounts(owner.clone()), &accounts);
+        if !already_registered {
+            accounts.push_back(account_address.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::Accounts(owner.clone()), &accounts);
 
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::AccountCount)
-            .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&DataKey::AccountCount, &(count + 1));
+            let count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AccountCount)
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&DataKey::AccountCount, &(count + 1));
+        }
 
         emit(
             &env,
@@ -232,8 +235,9 @@ impl MuxAccountFactory {
     ///
     /// This is a global monotonically-increasing counter.  It increments by 1
     /// on every successful [`Self::deploy_account`] or
-    /// [`Self::deploy_account_with_metadata`] call regardless of owner.
-    /// Rejected deploys (errors) do **not** increment the counter.
+    /// [`Self::deploy_account_with_metadata`] call for a new account.
+    /// Re-deploying an already-registered account is idempotent and does not
+    /// increment this counter.
     ///
     /// No authorization required.  Does **not** extend TTL.
     pub fn account_count(env: Env) -> u64 {
@@ -247,6 +251,22 @@ impl MuxAccountFactory {
     ///
     /// Identical to [`Self::deploy_account`] plus: validates metadata string sizes,
     /// stores an [`AccountMetadata`] entry, and emits an additional `meta_set` event.
+    /// Re-deploying an existing account idempotently updates the metadata.
+    ///
+    /// The caller must be `owner`.  `account_address` must differ from `owner`.
+    /// Metadata strings are individually bounded to prevent storage bloat:
+    ///
+    /// | Field | Max bytes | Constant |
+    /// |-------|-----------|----------|
+    /// | `version` | 32 | `MAX_VERSION_LENGTH` |
+    /// | `description` | 256 | `MAX_DESCRIPTION_LENGTH` |
+    /// | `author` | 64 | `MAX_AUTHOR_LENGTH` |
+    ///
+    /// # Errors
+    ///
+    /// | Variant | When |
+    /// |---------|------|
+
     ///
     /// The caller must be `owner`.  `account_address` must differ from `owner`.
     /// Metadata strings are individually bounded to prevent storage bloat:
@@ -288,25 +308,28 @@ impl MuxAccountFactory {
             return Err(MuxAccountFactoryError::InvalidAccount);
         }
 
-        // STORAGE-GRIEFING: bound Accounts vec growth on deploy.
-        let mut accounts = Self::load_accounts_under_cap(&env, &owner)?;
+        // STORAGE-GRIEFING: bound Accounts vec growth on deploy; idempotent if already registered.
+        let (mut accounts, already_registered) =
+            Self::load_accounts_for_deploy(&env, &owner, &account_address)?;
 
         // STORAGE-GRIEFING: validate metadata string sizes to prevent storage bloat.
         Self::validate_metadata(&version, &description, &author)?;
 
-        accounts.push_back(account_address.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::Accounts(owner.clone()), &accounts);
+        if !already_registered {
+            accounts.push_back(account_address.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::Accounts(owner.clone()), &accounts);
 
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::AccountCount)
-            .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&DataKey::AccountCount, &(count + 1));
+            let count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AccountCount)
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&DataKey::AccountCount, &(count + 1));
+        }
 
         // Store metadata
         let meta = AccountMetadata {
@@ -386,7 +409,7 @@ impl MuxAccountFactory {
             return Err(MuxAccountFactoryError::InvalidAccount);
         }
         // Mirror the deploy-path Accounts bound so dry-run stays auditable.
-        let _ = Self::load_accounts_under_cap(&env, &owner)?;
+        let _ = Self::load_accounts_for_deploy(&env, &owner, &account_address)?;
         Ok(account_address)
     }
 
@@ -410,7 +433,7 @@ impl MuxAccountFactory {
         if account_address == owner {
             return Err(MuxAccountFactoryError::InvalidAccount);
         }
-        let _ = Self::load_accounts_under_cap(&env, &owner)?;
+        let _ = Self::load_accounts_for_deploy(&env, &owner, &account_address)?;
         Self::validate_metadata(&version, &description, &author)?;
         Ok(account_address)
     }
@@ -437,21 +460,36 @@ impl MuxAccountFactory {
     // ── Private helpers ────────────────────────────────────────────────────────
 
     /// Load the owner's Accounts vec, rejecting when it is already at the
-    /// storage-griefing cap. Shared by deploy and simulate paths.
-    fn load_accounts_under_cap(
+    /// storage-griefing cap unless the account is already registered (idempotency).
+    /// Shared by deploy and simulate paths.
+    fn load_accounts_for_deploy(
         env: &Env,
         owner: &Address,
-    ) -> Result<Vec<Address>, MuxAccountFactoryError> {
+        account_address: &Address,
+    ) -> Result<(Vec<Address>, bool), MuxAccountFactoryError> {
+
         let accounts: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::Accounts(owner.clone()))
             .unwrap_or_else(|| Vec::new(env));
 
-        if accounts.len() >= MAX_ACCOUNTS_PER_OWNER {
+        let already_registered = accounts.contains(account_address);
+        if !already_registered && accounts.len() >= MAX_ACCOUNTS_PER_OWNER {
             return Err(MuxAccountFactoryError::TooManyAccounts);
         }
-        Ok(accounts)
+        Ok((accounts, already_registered))
+        let accounts: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Accounts(owner.clone()))
+            .unwrap_or_else(|| Vec::new(env));
+
+        let already_registered = accounts.contains(account_address);
+        if !already_registered && accounts.len() >= MAX_ACCOUNTS_PER_OWNER {
+            return Err(MuxAccountFactoryError::TooManyAccounts);
+        }
+        Ok((accounts, already_registered))
     }
 
     fn validate_metadata(
@@ -563,6 +601,91 @@ mod tests {
     }
 
     #[test]
+    fn test_deploy_account_idempotent() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let account_addr = Address::generate(&env);
+        let deployed1 = client.deploy_account(&owner, &account_addr);
+        assert_eq!(deployed1, account_addr);
+        assert_eq!(client.account_count(), 1);
+        assert_eq!(client.get_accounts(&owner).len(), 1);
+
+        // Second deploy with same account is idempotent: does not duplicate or increment count
+        let deployed2 = client.deploy_account(&owner, &account_addr);
+        assert_eq!(deployed2, account_addr);
+        assert_eq!(client.account_count(), 1);
+        let accounts = client.get_accounts(&owner);
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts.get(0).unwrap(), account_addr);
+    }
+
+    #[test]
+    fn test_deploy_account_with_metadata_idempotent() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let account_addr = Address::generate(&env);
+        let version1 = String::from_str(&env, "1.0.0");
+        let desc1 = String::from_str(&env, "Initial");
+        let author = String::from_str(&env, "mux-labs");
+
+        client.deploy_account_with_metadata(&owner, &account_addr, &version1, &desc1, &author);
+        assert_eq!(client.account_count(), 1);
+        assert_eq!(client.get_accounts(&owner).len(), 1);
+
+        let meta1 = client.get_account_metadata(&owner, &account_addr);
+        assert_eq!(meta1.version, version1);
+        assert_eq!(meta1.description, desc1);
+
+        // Updating metadata idempotently for the same account
+        let version2 = String::from_str(&env, "1.1.0");
+        let desc2 = String::from_str(&env, "Updated");
+        client.deploy_account_with_metadata(&owner, &account_addr, &version2, &desc2, &author);
+        assert_eq!(client.account_count(), 1);
+        assert_eq!(client.get_accounts(&owner).len(), 1);
+
+        let meta2 = client.get_account_metadata(&owner, &account_addr);
+        assert_eq!(meta2.version, version2);
+        assert_eq!(meta2.description, desc2);
+    }
+
+    #[test]
+    fn test_deploy_account_idempotent_at_cap() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+        let first_account = Address::generate(&env);
+        client.deploy_account(&owner, &first_account);
+
+        for _ in 1..64 {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+        assert_eq!(client.get_accounts(&owner).len(), 64);
+
+        // Re-deploying an existing account succeeds even when at cap
+        let result = client.try_deploy_account(&owner, &first_account);
+        assert!(result.is_ok());
+
+        let sim_result = client.try_simulate_deploy(&owner, &first_account);
+        assert!(sim_result.is_ok());
+
+        // But deploying a 65th distinct account still fails with TooManyAccounts
+        let new_account = Address::generate(&env);
+        let err_result = client.try_deploy_account(&owner, &new_account);
+        assert_eq!(err_result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
+    }
+
+    #[test]
+    fn test_deploy_emits_event() {
+        use soroban_sdk::testutils::Events;
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let account_addr = Address::generate(&env);
+        client.deploy_account(&owner, &account_addr);
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+        let (_, topics, _) = events.get(0).unwrap();
+        let action = soroban_sdk::Symbol::from_val(&env, &topics.get(1).unwrap());
+        assert_eq!
     fn test_deploy_emits_event() {
         use soroban_sdk::testutils::Events;
         let (env, client) = setup();
